@@ -4,6 +4,7 @@ use ratatui::widgets::{Block, Borders, List, ListItem};
 
 pub fn render(frame: &mut Frame, app: &App, area: Rect) {
     let is_active = matches!(app.active_panel, Panel::Scanner);
+    let flat = app.flat_scan_addresses();
 
     let border_style = if is_active {
         Style::default().fg(Color::Yellow)
@@ -11,12 +12,13 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
         Style::default().fg(Color::DarkGray)
     };
 
+    let total: usize = app.scan_results.iter().map(|r| r.addresses.len()).sum();
     let block = Block::default()
-        .title(format!(" scan results ({}) ", app.scan_results.len()))
+        .title(format!(" scan results ({total}) "))
         .borders(Borders::ALL)
         .border_style(border_style);
 
-    if app.scan_results.is_empty() {
+    if flat.is_empty() {
         let inner = block.inner(area);
         frame.render_widget(block, area);
 
@@ -26,30 +28,26 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
         return;
     }
 
-    let items: Vec<ListItem> = app
-        .scan_results
+    let items: Vec<ListItem> = flat
         .iter()
         .enumerate()
-        .flat_map(|(i, result)| {
-            let mut items = vec![ListItem::new(Line::from(vec![
-                Span::styled(format!("[{i}] "), Style::default().fg(Color::DarkGray)),
-                Span::styled(&result.pattern, Style::default().fg(Color::Cyan)),
+        .map(|(i, (scan_idx, addr))| {
+            let selected = is_active && i == app.selected_index;
+            let prefix = if selected { "> " } else { "  " };
+            let style = if selected {
+                Style::default().fg(Color::Yellow).bg(Color::DarkGray)
+            } else {
+                Style::default()
+            };
+
+            ListItem::new(Line::from(vec![
+                Span::styled(prefix, style),
+                Span::styled(format!("0x{addr:X}"), style),
                 Span::styled(
-                    format!(" ({} hits)", result.addresses.len()),
+                    format!("  [scan {scan_idx}]"),
                     Style::default().fg(Color::DarkGray),
                 ),
-            ]))];
-
-            for addr in result.addresses.iter().take(10) {
-                items.push(ListItem::new(format!("  0x{addr:X}")));
-            }
-            if result.addresses.len() > 10 {
-                items.push(ListItem::new(format!(
-                    "  ... +{} more",
-                    result.addresses.len() - 10
-                )));
-            }
-            items
+            ]))
         })
         .collect();
 

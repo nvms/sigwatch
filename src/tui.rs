@@ -1,4 +1,4 @@
-use crate::app::{App, InputMode};
+use crate::app::{App, InputMode, Panel};
 use crate::widgets;
 use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode, KeyModifiers};
@@ -66,7 +66,18 @@ fn handle_normal_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
         KeyCode::Tab => app.cycle_panel(),
         KeyCode::Down | KeyCode::Char('j') => app.select_next(),
         KeyCode::Up | KeyCode::Char('k') => app.select_prev(),
+        KeyCode::Enter => handle_enter(app),
         _ => {}
+    }
+}
+
+fn handle_enter(app: &mut App) {
+    if let Panel::Scanner = app.active_panel {
+        let flat = app.flat_scan_addresses();
+        if app.selected_index < flat.len() {
+            app.input_mode = InputMode::Command;
+            app.input_buffer = format!("pick {} ", app.selected_index);
+        }
     }
 }
 

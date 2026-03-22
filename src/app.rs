@@ -3,6 +3,7 @@ use crate::scanner::{self, ScanResult};
 use crate::session::Session;
 use crate::watch::{WatchFormat, WatchList, Watchpoint};
 use procmod_core::Process;
+use std::time::Instant;
 
 pub enum InputMode {
     Normal,
@@ -24,7 +25,7 @@ pub struct App {
     pub active_panel: Panel,
     pub selected_index: usize,
     pub poll_rate_ms: u64,
-    pub status_message: String,
+    pub status_message: Option<(String, Instant)>,
     pub running: bool,
 }
 
@@ -51,9 +52,33 @@ impl App {
             active_panel: Panel::Watches,
             selected_index: 0,
             poll_rate_ms,
-            status_message: String::new(),
+            status_message: None,
             running: true,
         }
+    }
+
+    fn set_status(&mut self, msg: impl Into<String>) {
+        self.status_message = Some((msg.into(), Instant::now()));
+    }
+
+    pub fn active_status(&self) -> Option<&str> {
+        self.status_message.as_ref().and_then(|(msg, when)| {
+            if when.elapsed().as_secs() < 5 {
+                Some(msg.as_str())
+            } else {
+                None
+            }
+        })
+    }
+
+    pub fn flat_scan_addresses(&self) -> Vec<(usize, usize)> {
+        self.scan_results
+            .iter()
+            .enumerate()
+            .flat_map(|(scan_idx, result)| {
+                result.addresses.iter().map(move |&addr| (scan_idx, addr))
+            })
+            .collect()
     }
 
     pub fn poll(&mut self) {
@@ -69,19 +94,21 @@ impl App {
         match parts[0] {
             "scan" => self.cmd_scan(&parts[1..]),
             "watch" => self.cmd_watch(&parts[1..]),
+            "pick" => self.cmd_pick(&parts[1..]),
             "layout" => self.cmd_layout(&parts[1..]),
             "export" => self.cmd_export(&parts[1..]),
             "rate" => self.cmd_rate(&parts[1..]),
             "remove" | "rm" => self.cmd_remove(&parts[1..]),
             "save" => self.cmd_save(&parts[1..]),
+            "help" | "?" => self.cmd_help(),
             "quit" | "q" => self.running = false,
-            _ => self.status_message = format!("unknown command: {}", parts[0]),
+            _ => self.set_status(format!("unknown command: {}", parts[0])),
         }
     }
 
     fn cmd_scan(&mut self, args: &[&str]) {
         if args.is_empty() {
-            self.status_message = "usage: scan <ida-signature>".to_string();
+            self.set_status("usage: scan <ida-signature>");
             return;
         }
         let sig = args.join(" ");
@@ -89,22 +116,24 @@ impl App {
             Ok(result) => {
                 let count = result.addresses.len();
                 self.scan_results.push(result);
-                self.status_message = format!("found {count} matches");
+                self.set_status(format!("found {count} matches"));
+                self.active_panel = Panel::Scanner;
+                self.selected_index = 0;
             }
-            Err(e) => self.status_message = format!("scan failed: {e}"),
+            Err(e) => self.set_status(format!("scan failed: {e}")),
         }
     }
 
     fn cmd_watch(&mut self, args: &[&str]) {
         if args.len() < 2 {
-            self.status_message = "usage: watch <address> <type> [label]".to_string();
+            self.set_status("usage: watch <address> <type> [label]");
             return;
         }
 
         let address = match parse_address(args[0]) {
             Some(a) => a,
             None => {
-                self.status_message = format!("invalid address: {}", args[0]);
+                self.set_status(format!("invalid address: {}", args[0]));
                 return;
             }
         };
@@ -112,7 +141,7 @@ impl App {
         let (format, size) = match parse_type(args[1]) {
             Some(fs) => fs,
             None => {
-                self.status_message = format!("unknown type: {}", args[1]);
+                self.set_status(format!("unknown type: {}", args[1]));
                 return;
             }
         };
@@ -125,19 +154,61 @@ impl App {
 
         self.watch_list
             .add(Watchpoint::new(label, address, size, format));
-        self.status_message = format!("watching 0x{address:X}");
+        self.set_status(format!("watching 0x{address:X}"));
+    }
+
+    fn cmd_pick(&mut self, args: &[&str]) {
+        if args.is_empty() {
+            self.set_status("usage: pick <index> <type> [label]");
+            return;
+        }
+
+        let flat = self.flat_scan_addresses();
+        if flat.is_empty() {
+            self.set_status("no scan results");
+            return;
+        }
+
+        let idx = match args[0].parse::<usize>() {
+            Ok(i) if i < flat.len() => i,
+            _ => {
+                self.set_status(format!("invalid index (0-{})", flat.len() - 1));
+                return;
+            }
+        };
+
+        let type_str = if args.len() > 1 { args[1] } else { "u8" };
+        let (format, size) = match parse_type(type_str) {
+            Some(fs) => fs,
+            None => {
+                self.set_status(format!("unknown type: {type_str}"));
+                return;
+            }
+        };
+
+        let (_, addr) = flat[idx];
+        let label = if args.len() > 2 {
+            args[2..].join(" ")
+        } else {
+            format!("0x{addr:X}")
+        };
+
+        self.watch_list
+            .add(Watchpoint::new(label, addr, size, format));
+        self.set_status(format!("watching 0x{addr:X}"));
+        self.active_panel = Panel::Watches;
     }
 
     fn cmd_layout(&mut self, args: &[&str]) {
         if args.len() < 2 {
-            self.status_message = "usage: layout <file> <base-address>".to_string();
+            self.set_status("usage: layout <file> <base-address>");
             return;
         }
 
         let base = match parse_address(args[1]) {
             Some(a) => a,
             None => {
-                self.status_message = format!("invalid address: {}", args[1]);
+                self.set_status(format!("invalid address: {}", args[1]));
                 return;
             }
         };
@@ -148,49 +219,49 @@ impl App {
                 for w in def.to_watchpoints(base) {
                     self.watch_list.add(w);
                 }
-                self.status_message = format!("loaded {count} fields");
+                self.set_status(format!("loaded {count} fields"));
             }
-            Err(e) => self.status_message = format!("layout error: {e}"),
+            Err(e) => self.set_status(format!("layout error: {e}")),
         }
     }
 
     fn cmd_export(&mut self, args: &[&str]) {
         if args.is_empty() {
-            self.status_message = "usage: export <file>".to_string();
+            self.set_status("usage: export <file>");
             return;
         }
         let session = self.to_session();
         match crate::session::save(&session, args[0]) {
-            Ok(_) => self.status_message = format!("exported to {}", args[0]),
-            Err(e) => self.status_message = format!("export failed: {e}"),
+            Ok(_) => self.set_status(format!("exported to {}", args[0])),
+            Err(e) => self.set_status(format!("export failed: {e}")),
         }
     }
 
     fn cmd_rate(&mut self, args: &[&str]) {
         if args.is_empty() {
-            self.status_message = format!("poll rate: {}ms", self.poll_rate_ms);
+            self.set_status(format!("poll rate: {}ms", self.poll_rate_ms));
             return;
         }
         match args[0].parse::<u64>() {
             Ok(ms) if ms >= 10 => {
                 self.poll_rate_ms = ms;
-                self.status_message = format!("poll rate set to {ms}ms");
+                self.set_status(format!("poll rate set to {ms}ms"));
             }
-            _ => self.status_message = "rate must be >= 10ms".to_string(),
+            _ => self.set_status("rate must be >= 10ms"),
         }
     }
 
     fn cmd_remove(&mut self, args: &[&str]) {
         if args.is_empty() {
-            self.status_message = "usage: remove <index>".to_string();
+            self.set_status("usage: remove <index>");
             return;
         }
         match args[0].parse::<usize>() {
             Ok(i) => match self.watch_list.remove(i) {
-                Some(w) => self.status_message = format!("removed: {}", w.label),
-                None => self.status_message = "invalid index".to_string(),
+                Some(w) => self.set_status(format!("removed: {}", w.label)),
+                None => self.set_status("invalid index"),
             },
-            Err(_) => self.status_message = "usage: remove <index>".to_string(),
+            Err(_) => self.set_status("usage: remove <index>"),
         }
     }
 
@@ -199,13 +270,13 @@ impl App {
             match crate::session::auto_save_path(self.process.pid()) {
                 Some(p) => {
                     if let Err(e) = crate::session::ensure_session_dir() {
-                        self.status_message = format!("save failed: {e}");
+                        self.set_status(format!("save failed: {e}"));
                         return;
                     }
                     p.to_string_lossy().to_string()
                 }
                 None => {
-                    self.status_message = "no default save path".to_string();
+                    self.set_status("no default save path");
                     return;
                 }
             }
@@ -215,9 +286,13 @@ impl App {
 
         let session = self.to_session();
         match crate::session::save(&session, &path) {
-            Ok(_) => self.status_message = format!("saved to {path}"),
-            Err(e) => self.status_message = format!("save failed: {e}"),
+            Ok(_) => self.set_status(format!("saved to {path}")),
+            Err(e) => self.set_status(format!("save failed: {e}")),
         }
+    }
+
+    fn cmd_help(&mut self) {
+        self.set_status("scan watch pick layout export save rate remove help quit");
     }
 
     fn to_session(&self) -> Session {
@@ -229,10 +304,14 @@ impl App {
         }
     }
 
+    pub fn scanner_len(&self) -> usize {
+        self.scan_results.iter().map(|r| r.addresses.len()).sum()
+    }
+
     pub fn select_next(&mut self) {
         let len = match self.active_panel {
             Panel::Watches => self.watch_list.len(),
-            Panel::Scanner => self.scan_results.len(),
+            Panel::Scanner => self.scanner_len(),
             Panel::Modules => 0,
         };
         if len > 0 {
