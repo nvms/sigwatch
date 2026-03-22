@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="https://raw.githubusercontent.com/nvms/sigwatch/main/logo.svg" width="128" height="128" alt="sigwatch" style="border-radius: 16px;" />
+</p>
+
 # sigwatch
 
 Live game state inspector. A TUI application for real-time process memory visualization, built on [procmod](https://github.com/procmod).
