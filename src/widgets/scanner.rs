@@ -1,8 +1,8 @@
 use crate::app::{App, Panel};
 use ratatui::prelude::*;
-use ratatui::widgets::{Block, Borders, List, ListItem};
+use ratatui::widgets::{Block, Borders, HighlightSpacing, List, ListItem};
 
-pub fn render(frame: &mut Frame, app: &App, area: Rect) {
+pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
     let is_active = matches!(app.active_panel, Panel::Scanner);
     let flat = app.flat_scan_addresses();
 
@@ -30,19 +30,9 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
 
     let items: Vec<ListItem> = flat
         .iter()
-        .enumerate()
-        .map(|(i, (scan_idx, addr))| {
-            let selected = is_active && i == app.selected_index;
-            let prefix = if selected { "> " } else { "  " };
-            let style = if selected {
-                Style::default().fg(Color::Yellow).bg(Color::DarkGray)
-            } else {
-                Style::default()
-            };
-
+        .map(|(scan_idx, addr)| {
             ListItem::new(Line::from(vec![
-                Span::styled(prefix, style),
-                Span::styled(format!("0x{addr:X}"), style),
+                Span::styled(format!("0x{addr:X}"), Style::default()),
                 Span::styled(
                     format!("  [scan {scan_idx}]"),
                     Style::default().fg(Color::DarkGray),
@@ -51,6 +41,17 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
         })
         .collect();
 
-    let list = List::new(items).block(block);
-    frame.render_widget(list, area);
+    let highlight = if is_active {
+        Style::default().fg(Color::Yellow).bg(Color::DarkGray)
+    } else {
+        Style::default()
+    };
+
+    let list = List::new(items)
+        .block(block)
+        .highlight_style(highlight)
+        .highlight_symbol("> ")
+        .highlight_spacing(HighlightSpacing::Always);
+
+    frame.render_stateful_widget(list, area, &mut app.scanner_list_state);
 }

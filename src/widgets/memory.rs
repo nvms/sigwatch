@@ -1,9 +1,9 @@
 use crate::app::{App, Panel};
 use crate::display;
 use ratatui::prelude::*;
-use ratatui::widgets::{Block, Borders, Row, Table};
+use ratatui::widgets::{Block, Borders, HighlightSpacing, Row, Table};
 
-pub fn render(frame: &mut Frame, app: &App, area: Rect) {
+pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
     let is_active = matches!(app.active_panel, Panel::Watches);
 
     let border_style = if is_active {
@@ -43,12 +43,6 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
             } else {
                 Style::default()
             };
-            let selected = is_active && i == app.selected_index;
-            let style = if selected {
-                style.bg(Color::DarkGray)
-            } else {
-                style
-            };
 
             Row::new(vec![
                 format!("{i}"),
@@ -67,7 +61,17 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
         Constraint::Length(8),
     ];
 
-    let table = Table::new(rows, widths).header(header).block(block);
+    let highlight = if is_active {
+        Style::default().bg(Color::DarkGray)
+    } else {
+        Style::default()
+    };
 
-    frame.render_widget(table, area);
+    let table = Table::new(rows, widths)
+        .header(header)
+        .block(block)
+        .row_highlight_style(highlight)
+        .highlight_spacing(HighlightSpacing::Always);
+
+    frame.render_stateful_widget(table, area, &mut app.watch_table_state);
 }

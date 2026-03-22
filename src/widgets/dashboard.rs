@@ -2,7 +2,7 @@ use crate::app::App;
 use crate::widgets::{memory, scanner, status};
 use ratatui::prelude::*;
 
-pub fn render(frame: &mut Frame, app: &App) {
+pub fn render(frame: &mut Frame, app: &mut App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(1), Constraint::Length(3)])

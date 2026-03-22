@@ -3,6 +3,7 @@ use crate::scanner::{self, ScanResult};
 use crate::session::Session;
 use crate::watch::{WatchFormat, WatchList, Watchpoint};
 use procmod_core::Process;
+use ratatui::widgets::{ListState, TableState};
 use std::time::Instant;
 
 pub enum InputMode {
@@ -24,6 +25,8 @@ pub struct App {
     pub input_buffer: String,
     pub active_panel: Panel,
     pub selected_index: usize,
+    pub watch_table_state: TableState,
+    pub scanner_list_state: ListState,
     pub poll_rate_ms: u64,
     pub status_message: Option<(String, Instant)>,
     pub running: bool,
@@ -51,6 +54,8 @@ impl App {
             input_buffer: String::new(),
             active_panel: Panel::Watches,
             selected_index: 0,
+            watch_table_state: TableState::default().with_selected(Some(0)),
+            scanner_list_state: ListState::default().with_selected(Some(0)),
             poll_rate_ms,
             status_message: None,
             running: true,
@@ -308,6 +313,14 @@ impl App {
         self.scan_results.iter().map(|r| r.addresses.len()).sum()
     }
 
+    fn sync_selection(&mut self) {
+        match self.active_panel {
+            Panel::Watches => self.watch_table_state.select(Some(self.selected_index)),
+            Panel::Scanner => self.scanner_list_state.select(Some(self.selected_index)),
+            Panel::Modules => {}
+        }
+    }
+
     pub fn select_next(&mut self) {
         let len = match self.active_panel {
             Panel::Watches => self.watch_list.len(),
@@ -317,10 +330,12 @@ impl App {
         if len > 0 {
             self.selected_index = (self.selected_index + 1).min(len - 1);
         }
+        self.sync_selection();
     }
 
     pub fn select_prev(&mut self) {
         self.selected_index = self.selected_index.saturating_sub(1);
+        self.sync_selection();
     }
 
     pub fn cycle_panel(&mut self) {
@@ -330,6 +345,7 @@ impl App {
             Panel::Modules => Panel::Watches,
         };
         self.selected_index = 0;
+        self.sync_selection();
     }
 }
 
