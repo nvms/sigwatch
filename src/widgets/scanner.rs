@@ -1,10 +1,9 @@
 use crate::app::{App, Panel};
 use ratatui::prelude::*;
-use ratatui::widgets::{Block, Borders, HighlightSpacing, List, ListItem};
+use ratatui::widgets::{Block, Borders, HighlightSpacing, List, ListItem, Paragraph};
 
 pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
     let is_active = matches!(app.active_panel, Panel::Scanner);
-    let flat = app.flat_scan_addresses();
 
     let border_style = if is_active {
         Style::default().fg(Color::Yellow)
@@ -12,31 +11,82 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
         Style::default().fg(Color::DarkGray)
     };
 
-    let total: usize = app.scan_results.iter().map(|r| r.addresses.len()).sum();
+    let session = match &app.scan {
+        Some(s) => s,
+        None => {
+            let block = Block::default()
+                .title(" scanner ")
+                .borders(Borders::ALL)
+                .border_style(border_style);
+            let inner = block.inner(area);
+            frame.render_widget(block, area);
+
+            let lines = vec![
+                Line::from(""),
+                Line::from(Span::styled(
+                    "  type :scan <value> to search process memory",
+                    Style::default().fg(Color::DarkGray),
+                )),
+                Line::from(""),
+                Line::from(Span::styled(
+                    "  examples:",
+                    Style::default().fg(Color::DarkGray),
+                )),
+                Line::from(Span::styled(
+                    "    :scan 75.0     search for float",
+                    Style::default().fg(Color::DarkGray),
+                )),
+                Line::from(Span::styled(
+                    "    :scan 42       search for integer",
+                    Style::default().fg(Color::DarkGray),
+                )),
+                Line::from(Span::styled(
+                    "    :scan DE AD    search for hex bytes",
+                    Style::default().fg(Color::DarkGray),
+                )),
+            ];
+            frame.render_widget(Paragraph::new(lines), inner);
+            return;
+        }
+    };
+
+    let count = session.candidates.len();
+    let vtype = session.value_type.label();
+    let steps = session.history.len();
+
+    let title = format!(" {count} candidates ({vtype}) [{steps} step(s)] ");
     let block = Block::default()
-        .title(format!(" scan results ({total}) "))
+        .title(title)
         .borders(Borders::ALL)
         .border_style(border_style);
 
-    if flat.is_empty() {
+    if session.candidates.is_empty() {
         let inner = block.inner(area);
         frame.render_widget(block, area);
-
-        let hint = ratatui::widgets::Paragraph::new("no scans yet")
-            .style(Style::default().fg(Color::DarkGray));
-        frame.render_widget(hint, inner);
+        let lines = vec![
+            Line::from(""),
+            Line::from(Span::styled(
+                "  no candidates left",
+                Style::default().fg(Color::DarkGray),
+            )),
+            Line::from(Span::styled(
+                "  :reset to start a new scan",
+                Style::default().fg(Color::DarkGray),
+            )),
+        ];
+        frame.render_widget(Paragraph::new(lines), inner);
         return;
     }
 
-    let items: Vec<ListItem> = flat
+    let items: Vec<ListItem> = session
+        .candidates
         .iter()
-        .map(|(scan_idx, addr)| {
+        .map(|c| {
+            let value = session.format_value(c);
             ListItem::new(Line::from(vec![
-                Span::styled(format!("0x{addr:X}"), Style::default()),
-                Span::styled(
-                    format!("  [scan {scan_idx}]"),
-                    Style::default().fg(Color::DarkGray),
-                ),
+                Span::styled(format!("0x{:X}", c.address), Style::default()),
+                Span::styled("  =  ", Style::default().fg(Color::DarkGray)),
+                Span::styled(value, Style::default().fg(Color::Cyan)),
             ]))
         })
         .collect();

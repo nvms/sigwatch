@@ -1,5 +1,5 @@
 use crate::layout;
-use crate::scanner::{self, ScanResult};
+use crate::scanner::{self, ScanSession};
 use crate::session::Session;
 use crate::watch::{WatchFormat, WatchList, Watchpoint};
 use procmod_core::Process;
@@ -20,7 +20,7 @@ pub enum Panel {
 pub struct App {
     pub process: Process,
     pub watch_list: WatchList,
-    pub scan_results: Vec<ScanResult>,
+    pub scan: Option<ScanSession>,
     pub input_mode: InputMode,
     pub input_buffer: String,
     pub active_panel: Panel,
@@ -49,7 +49,7 @@ impl App {
         Self {
             process,
             watch_list,
-            scan_results: Vec::new(),
+            scan: None,
             input_mode: InputMode::Normal,
             input_buffer: String::new(),
             active_panel: Panel::Watches,
@@ -76,18 +76,15 @@ impl App {
         })
     }
 
-    pub fn flat_scan_addresses(&self) -> Vec<(usize, usize)> {
-        self.scan_results
-            .iter()
-            .enumerate()
-            .flat_map(|(scan_idx, result)| {
-                result.addresses.iter().map(move |&addr| (scan_idx, addr))
-            })
-            .collect()
-    }
-
     pub fn poll(&mut self) {
         self.watch_list.poll_all(&self.process);
+        if let Some(s) = &mut self.scan {
+            s.refresh(&self.process);
+        }
+    }
+
+    pub fn scanner_len(&self) -> usize {
+        self.scan.as_ref().map_or(0, |s| s.candidates.len())
     }
 
     pub fn execute_command(&mut self, input: &str) {
@@ -98,6 +95,8 @@ impl App {
 
         match parts[0] {
             "scan" => self.cmd_scan(&parts[1..]),
+            "narrow" => self.cmd_narrow(&parts[1..]),
+            "reset" => self.cmd_reset(),
             "watch" => self.cmd_watch(&parts[1..]),
             "pick" => self.cmd_pick(&parts[1..]),
             "layout" => self.cmd_layout(&parts[1..]),
@@ -113,20 +112,75 @@ impl App {
 
     fn cmd_scan(&mut self, args: &[&str]) {
         if args.is_empty() {
-            self.set_status("usage: scan <ida-signature>");
+            self.set_status("usage: scan <value>  (e.g. scan 75.0, scan 42, scan DE AD)");
             return;
         }
-        let sig = args.join(" ");
-        match scanner::scan_ida(&self.process, &sig) {
-            Ok(result) => {
-                let count = result.addresses.len();
-                self.scan_results.push(result);
-                self.set_status(format!("found {count} matches"));
+        let input = args.join(" ");
+        let parsed = match scanner::parse_value(&input) {
+            Ok(p) => p,
+            Err(e) => {
+                self.set_status(format!("bad value: {e}"));
+                return;
+            }
+        };
+        match scanner::initial_scan(&self.process, &parsed) {
+            Ok(session) => {
+                let count = session.candidates.len();
+                let vtype = session.value_type.label();
+                self.scan = Some(session);
+                self.set_status(format!(
+                    "{count} candidates ({vtype}) - change the value, then :narrow <new-value>"
+                ));
                 self.active_panel = Panel::Scanner;
                 self.selected_index = 0;
+                self.sync_selection();
             }
             Err(e) => self.set_status(format!("scan failed: {e}")),
         }
+    }
+
+    fn cmd_narrow(&mut self, args: &[&str]) {
+        if args.is_empty() {
+            self.set_status("usage: narrow <new-value>  (e.g. narrow 50.0)");
+            return;
+        }
+        let session = match &mut self.scan {
+            Some(s) => s,
+            None => {
+                self.set_status("no active scan - run :scan first");
+                return;
+            }
+        };
+        let input = args.join(" ");
+        let parsed = match scanner::parse_value(&input) {
+            Ok(p) => p,
+            Err(e) => {
+                self.set_status(format!("bad value: {e}"));
+                return;
+            }
+        };
+        let removed = scanner::narrow(&self.process, session, &parsed);
+        let remaining = session.candidates.len();
+        if remaining == 0 {
+            self.set_status("0 candidates left - all filtered out. :reset to start over");
+        } else if remaining <= 5 {
+            self.set_status(format!(
+                "{remaining} candidates left (-{removed}) - press enter to watch one"
+            ));
+        } else {
+            self.set_status(format!(
+                "{remaining} candidates left (-{removed}) - keep narrowing"
+            ));
+        }
+        self.selected_index = 0;
+        self.sync_selection();
+    }
+
+    fn cmd_reset(&mut self) {
+        self.scan = None;
+        self.selected_index = 0;
+        self.sync_selection();
+        self.set_status("scan cleared");
     }
 
     fn cmd_watch(&mut self, args: &[&str]) {
@@ -163,45 +217,48 @@ impl App {
     }
 
     fn cmd_pick(&mut self, args: &[&str]) {
-        if args.is_empty() {
-            self.set_status("usage: pick <index> <type> [label]");
-            return;
-        }
-
-        let flat = self.flat_scan_addresses();
-        if flat.is_empty() {
-            self.set_status("no scan results");
-            return;
-        }
-
-        let idx = match args[0].parse::<usize>() {
-            Ok(i) if i < flat.len() => i,
-            _ => {
-                self.set_status(format!("invalid index (0-{})", flat.len() - 1));
-                return;
-            }
-        };
-
-        let type_str = if args.len() > 1 { args[1] } else { "u8" };
-        let (format, size) = match parse_type(type_str) {
-            Some(fs) => fs,
+        let session = match &self.scan {
+            Some(s) => s,
             None => {
-                self.set_status(format!("unknown type: {type_str}"));
+                self.set_status("no scan results");
                 return;
             }
         };
 
-        let (_, addr) = flat[idx];
-        let label = if args.len() > 2 {
-            args[2..].join(" ")
+        if session.candidates.is_empty() {
+            self.set_status("no candidates");
+            return;
+        }
+
+        let idx = if args.is_empty() {
+            self.selected_index
+        } else {
+            match args[0].parse::<usize>() {
+                Ok(i) if i < session.candidates.len() => i,
+                _ => {
+                    self.set_status(format!(
+                        "invalid index (0-{})",
+                        session.candidates.len() - 1
+                    ));
+                    return;
+                }
+            }
+        };
+
+        let addr = session.candidates[idx].address;
+        let (wfmt, size) = scan_type_to_watch(session.value_type);
+        let label = if args.len() > 1 {
+            args[1..].join(" ")
         } else {
             format!("0x{addr:X}")
         };
 
         self.watch_list
-            .add(Watchpoint::new(label, addr, size, format));
+            .add(Watchpoint::new(label, addr, size, wfmt));
         self.set_status(format!("watching 0x{addr:X}"));
         self.active_panel = Panel::Watches;
+        self.selected_index = self.watch_list.len().saturating_sub(1);
+        self.sync_selection();
     }
 
     fn cmd_layout(&mut self, args: &[&str]) {
@@ -297,7 +354,9 @@ impl App {
     }
 
     fn cmd_help(&mut self) {
-        self.set_status("scan watch pick layout export save rate remove help quit");
+        self.set_status(
+            "scan <val> | narrow <val> | reset | watch | pick | layout | save | rate | rm | quit",
+        );
     }
 
     fn to_session(&self) -> Session {
@@ -307,10 +366,6 @@ impl App {
             layouts: Vec::new(),
             poll_rate_ms: self.poll_rate_ms,
         }
-    }
-
-    pub fn scanner_len(&self) -> usize {
-        self.scan_results.iter().map(|r| r.addresses.len()).sum()
     }
 
     fn sync_selection(&mut self) {
@@ -346,6 +401,17 @@ impl App {
         };
         self.selected_index = 0;
         self.sync_selection();
+    }
+}
+
+fn scan_type_to_watch(vt: scanner::ValueType) -> (WatchFormat, usize) {
+    match vt {
+        scanner::ValueType::I16 => (WatchFormat::Decimal, 2),
+        scanner::ValueType::I32 => (WatchFormat::Decimal, 4),
+        scanner::ValueType::I64 => (WatchFormat::Decimal, 8),
+        scanner::ValueType::F32 => (WatchFormat::Float, 4),
+        scanner::ValueType::F64 => (WatchFormat::Float, 8),
+        scanner::ValueType::Bytes => (WatchFormat::Hex, 1),
     }
 }
 

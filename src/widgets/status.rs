@@ -52,7 +52,7 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
 fn hints_for_panel(panel: &Panel) -> &'static str {
     match panel {
         Panel::Watches => "q:quit  ::cmd  tab:panel  j/k:nav  ?:help",
-        Panel::Scanner => "q:quit  ::cmd  tab:panel  j/k:nav  enter:pick as type  ?:help",
+        Panel::Scanner => "q:quit  ::cmd  tab:panel  j/k:nav  enter:watch  :narrow <val>  :reset",
         Panel::Modules => "q:quit  ::cmd  tab:panel  j/k:nav  ?:help",
     }
 }

@@ -73,10 +73,9 @@ fn handle_normal_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
 
 fn handle_enter(app: &mut App) {
     if let Panel::Scanner = app.active_panel {
-        let flat = app.flat_scan_addresses();
-        if app.selected_index < flat.len() {
+        if app.scanner_len() > 0 {
             app.input_mode = InputMode::Command;
-            app.input_buffer = format!("pick {} ", app.selected_index);
+            app.input_buffer = "pick ".to_string();
         }
     }
 }
